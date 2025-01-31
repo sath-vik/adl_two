@@ -40,7 +40,7 @@ def predict_segmentation(model, sample_path):
 
     # Convert data to tensor
     X = torch.tensor(X).permute(0,3,1,2).float().to(device)
-    X = X / np.max(X) # normalize input
+    X = X / torch.max(X) # normalize input using torch.max(), which returns a tensor
 
     with torch.no_grad():
         outputs = model(X)
