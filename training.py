@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import time
+import pandas as pd
 from torch.utils.tensorboard import SummaryWriter
 from data_loading import create_datasets, create_dataloaders
 from models import UNet
@@ -29,6 +30,7 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, writer):
     model.train()
     best_val_loss = float('inf')
 
+    training_log = [] # collect training log
     for epoch in range(EPOCHS):
         start = time.time()
         epoch_loss = 0
@@ -54,12 +56,14 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, writer):
         model.eval()
         with torch.no_grad():
             val_loss = 0
+            val_dice_coeff = 0
             for batch_idx, (images, masks) in enumerate(val_loader):
                 images = images.to(device)
                 masks = masks.to(device)
                 outputs = model(images)
                 loss = criterion(outputs, masks)
                 val_loss += loss.item()
+                val_dice_coeff += dice_coef(outputs, masks).item()
 
                 del images, masks, outputs, loss # free up memory
 
@@ -69,8 +73,17 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, writer):
         # compute metrics
         avg_epoch_loss = epoch_loss / len(train_loader)
         avg_val_loss = val_loss / len(val_loader)
+        avg_val_dice = val_dice_coeff / len(val_loader)
         end = time.time()
         epoch_time = end - start
+
+        training_log.append({ # save this metrics in the training log
+            "epoch": epoch + 1,
+            "train_loss": avg_epoch_loss,
+            "val_loss": avg_val_loss,
+             "val_dice_coef": avg_val_dice,
+             "learning_rate": optimizer.param_groups[0]['lr']
+        })
 
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
@@ -85,6 +98,10 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, writer):
         writer.add_scalar("Learning rate", optimizer.param_groups[0]['lr'], epoch)
 
         scheduler.step(avg_val_loss)
+
+    # Save the log file
+    df = pd.DataFrame(training_log)
+    df.to_csv("training.log", index = False)
 
 
 if __name__ == '__main__':

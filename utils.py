@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from tensorboard.backend.event_processing import event_accumulator
+import pandas as pd
 
 def dice_coef(inputs, masks, smooth = 1.0):
     """Computes the dice coefficient (per class)"""
@@ -24,7 +25,7 @@ def dice_loss(inputs, masks, smooth=1.0):
 
 
 def plot_training_history(log_dir):
-    """Plot training/validation loss/accuracy from TensorBoard logs."""
+    """Collect the training/validation loss/accuracy from TensorBoard logs into a dataframe."""
     ea = event_accumulator.EventAccumulator(log_dir)
     ea.Reload()
 
@@ -37,30 +38,43 @@ def plot_training_history(log_dir):
     loss_val_values = [item.value for item in loss_val]
     learning_rates_values = [item.value for item in learning_rates]
 
+    data = {
+        'epochs':epochs,
+        'loss_train':loss_train_values,
+        'loss_val':loss_val_values,
+        'learning_rate': learning_rates_values
+    }
+    return pd.DataFrame(data)
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4))
+def calculate_iou_per_class(inputs, masks, num_classes):
+    """Computes IoU for each class."""
+    ious = []
+    for i in range(num_classes):
+        mask = (masks == i).float()
+        probs = F.softmax(inputs, dim=1)[:,i]
+        intersection = (probs * mask).sum()
+        union = (probs.sum() + mask.sum()) - intersection
+        iou = intersection / (union + 1e-6)  # Added small constant for numerical stability
+        ious.append(iou.item())
+    return ious
 
-    # Loss plot
-    axes[0].plot(epochs, loss_train_values, label='Training Loss')
-    axes[0].plot(epochs, loss_val_values, label='Validation Loss')
-    axes[0].set_title('Loss over Epochs')
-    axes[0].set_xlabel('Epoch')
-    axes[0].set_ylabel('Loss')
-    axes[0].legend()
-
-    # learning rate plot
-    axes[1].plot(epochs, learning_rates_values, label = "Learning Rate")
-    axes[1].set_title('Learning rate')
-    axes[1].set_xlabel('Epoch')
-    axes[1].set_ylabel('Learning rate')
-
-    # learning rate plot
-    axes[2].plot(epochs[1:], np.diff(learning_rates_values), label = "Learning Rate")
-    axes[2].set_title('Learning rate changes')
-    axes[2].set_xlabel('Epoch')
-    axes[2].set_ylabel('Learning rate')
-    axes[2].legend()
+def calculate_miou(inputs, masks, num_classes):
+  """Compute Mean IoU (mIoU)."""
+  ious = calculate_iou_per_class(inputs, masks, num_classes)
+  return np.mean(ious)
 
 
-    plt.tight_layout()
-    plt.show()
+def calculate_pixel_accuracy(inputs, masks):
+    """Computes Pixel Accuracy."""
+    predicted_labels = torch.argmax(inputs, dim=1)
+    correct = (predicted_labels == masks).sum().item()
+    total = masks.numel()
+    return correct / total
+
+def calculate_mean_pixel_accuracy(inputs, masks, num_classes):
+  """Computes Mean Pixel Accuracy."""
+  total_pixel_accuracy = 0
+  for i in range(num_classes):
+      current_mask = (masks == i).float()
+      total_pixel_accuracy += calculate_pixel_accuracy(inputs[:,i].unsqueeze(1), current_mask.long())
+  return total_pixel_accuracy / num_classes

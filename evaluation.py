@@ -4,20 +4,22 @@ import numpy as np
 import torch.nn.functional as F
 from data_loading import create_datasets, create_dataloaders
 from models import UNet
-from utils import dice_coef
-from config import SEGMENT_CLASSES
+from utils import dice_coef, calculate_iou_per_class, calculate_miou, calculate_pixel_accuracy, calculate_mean_pixel_accuracy
+from config import SEGMENT_CLASSES, IMG_SIZE, VOLUME_START_AT, TRAIN_DATASET_PATH, VOLUME_SLICES
 from inference import load_model
 import cv2
 import matplotlib.pyplot as plt
 import os
 import nibabel as nib
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def evaluate_model(model, test_loader):
-    """Evaluate the model's performance on the test set"""
+def evaluate_model(model, test_loader, num_classes):
+    """Evaluate the model's performance on the test set and calculate metrics"""
     model.eval()  # set to eval mode
     total_dice = 0
+    total_miou = 0
+    total_pixel_accuracy = 0
+    total_mean_pixel_accuracy = 0
     with torch.no_grad():
         for images, masks in test_loader:
             images = images.to(device)
@@ -25,9 +27,17 @@ def evaluate_model(model, test_loader):
             outputs = model(images)
 
             total_dice += dice_coef(outputs, masks).item()
+            total_miou += calculate_miou(outputs, masks, num_classes)
+            total_pixel_accuracy += calculate_pixel_accuracy(outputs, masks)
+            total_mean_pixel_accuracy += calculate_mean_pixel_accuracy(outputs, masks, num_classes)
+
+
 
     avg_dice = total_dice / len(test_loader)
-    return avg_dice
+    avg_miou = total_miou / len(test_loader)
+    avg_pixel_accuracy = total_pixel_accuracy / len(test_loader)
+    avg_mean_pixel_accuracy = total_mean_pixel_accuracy / len(test_loader)
+    return avg_dice, avg_miou, avg_pixel_accuracy, avg_mean_pixel_accuracy
 
 def predictByPath(model, case_path, case):
     """Get prediction of all slices"""
@@ -47,7 +57,7 @@ def predictByPath(model, case_path, case):
         X[j,:,:,1] = cv2.resize(ce[:,:,j+VOLUME_START_AT], (IMG_SIZE,IMG_SIZE))
 
     X = torch.tensor(X).permute(0,3,1,2).float().to(device)
-    X = X / np.max(X)
+    X = X / torch.max(X)
     with torch.no_grad():
       outputs = model(X)
       probs = F.softmax(outputs, dim=1)
@@ -68,9 +78,9 @@ def showPredictsById(model, case, start_slice = 60):
     enhancing = (p[:,:,:]==3).astype(int)
 
     plt.figure(figsize=(18, 50))
-    f, axarr = plt.subplots(1,6, figsize = (18, 50))
+    f, axarr = plt.subplots(1,7, figsize = (18, 50))
 
-    for i in range(6): # for each image, add brain background
+    for i in range(7): # for each image, add brain background
         axarr[i].imshow(cv2.resize(origImage[:,:,start_slice+VOLUME_START_AT], (IMG_SIZE, IMG_SIZE)), cmap="gray", interpolation='none')
 
     axarr[0].imshow(cv2.resize(origImage[:,:,start_slice+VOLUME_START_AT], (IMG_SIZE, IMG_SIZE)), cmap="gray")
@@ -78,14 +88,19 @@ def showPredictsById(model, case, start_slice = 60):
     curr_gt=cv2.resize(gt[:,:,start_slice+VOLUME_START_AT], (IMG_SIZE, IMG_SIZE), interpolation = cv2.INTER_NEAREST)
     axarr[1].imshow(curr_gt, cmap="Reds", interpolation='none', alpha=0.3) # ,alpha=0.3,cmap='Reds'
     axarr[1].title.set_text('Ground truth')
+
     axarr[2].imshow(p[start_slice,:,:], cmap="Reds", interpolation='none', alpha=0.3)
     axarr[2].title.set_text('all classes predicted')
-    axarr[3].imshow(edema[start_slice,:,:], cmap="OrRd", interpolation='none', alpha=0.3)
+
+    axarr[3].imshow(core[start_slice,:,:], cmap="OrRd", interpolation='none', alpha=0.3)
     axarr[3].title.set_text(f'{SEGMENT_CLASSES[1]} predicted')
-    axarr[4].imshow(core[start_slice,:,:], cmap="OrRd", interpolation='none', alpha=0.3)
+    axarr[4].imshow(edema[start_slice,:,:], cmap="OrRd", interpolation='none', alpha=0.3)
     axarr[4].title.set_text(f'{SEGMENT_CLASSES[2]} predicted')
     axarr[5].imshow(enhancing[start_slice,:,:], cmap="OrRd", interpolation='none', alpha=0.3)
     axarr[5].title.set_text(f'{SEGMENT_CLASSES[3]} predicted')
+    # Display segmentation
+    axarr[6].imshow(np.argmax(p[start_slice,:,:], axis=-1), cmap = "Reds", interpolation='none', alpha=0.3)
+    axarr[6].title.set_text(f'all classes predicted (argmax)')
     plt.show()
 
 
@@ -120,8 +135,12 @@ if __name__ == '__main__':
     model = load_model("best_model.pth")
 
     # Evaluate the model
-    test_dice = evaluate_model(model, test_loader)
+    test_dice, test_miou, test_pixel_accuracy, test_mean_pixel_accuracy = evaluate_model(model, test_loader, num_classes=4)
+
     print(f"Test Dice coefficient: {test_dice:.4f}")
+    print(f"Test Mean IoU: {test_miou:.4f}")
+    print(f"Test Pixel Accuracy: {test_pixel_accuracy:.4f}")
+    print(f"Test Mean Pixel Accuracy: {test_mean_pixel_accuracy:.4f}")
 
     # Visual evaluation by slice
     showPredictsById(model, case=test_ids[0][-3:])

@@ -9,9 +9,11 @@ from models import UNet
 from utils import plot_training_history
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
-from evaluation import evaluate_model
+from evaluation import evaluate_model, showPredictsById, classEvaluation
 from inference import show_predicted_segmentations, load_model
-from config import EPOCHS, DATASET_URL, DATASET_ZIP, DATASET_DIR
+from config import EPOCHS, DATASET_URL, DATASET_ZIP, DATASET_DIR, SEGMENT_CLASSES
+import matplotlib.pyplot as plt
+import numpy as np
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -49,6 +51,38 @@ def download_and_extract():
     else:
         print("Dataset already downloaded and extracted.")
 
+def plot_all_metrics(df):
+  """Plot training loss, validation loss, and learning rate over time."""
+  epochs = df["epochs"]
+  loss_train = df["loss_train"]
+  loss_val = df["loss_val"]
+  learning_rate = df["learning_rate"]
+
+  fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    # Loss plot
+  axes[0].plot(epochs, loss_train, label='Training Loss')
+  axes[0].plot(epochs, loss_val, label='Validation Loss')
+  axes[0].set_title('Loss over Epochs')
+  axes[0].set_xlabel('Epoch')
+  axes[0].set_ylabel('Loss')
+  axes[0].legend()
+
+  # learning rate plot
+  axes[1].plot(epochs, learning_rate, label = "Learning Rate")
+  axes[1].set_title('Learning rate')
+  axes[1].set_xlabel('Epoch')
+  axes[1].set_ylabel('Learning rate')
+
+    # learning rate plot
+  axes[2].plot(epochs[1:], np.diff(learning_rate), label = "Learning Rate")
+  axes[2].set_title('Learning rate changes')
+  axes[2].set_xlabel('Epoch')
+  axes[2].set_ylabel('Learning rate')
+  axes[2].legend()
+  plt.show()
+
+
+
 if __name__ == '__main__':
     # 0. Download the data
     download_and_extract()
@@ -72,15 +106,26 @@ if __name__ == '__main__':
     writer.close()
 
     # 6. Plot training history
-    plot_training_history('runs/brats_training')
+    df = plot_training_history('runs/brats_training')
+    plot_all_metrics(df) # new plot code with matplotlib
 
     # 7. Evaluate the model
     model_eval = load_model("best_model.pth") # load best trained model
-    test_dice = evaluate_model(model_eval, test_loader)
+    test_dice, test_miou, test_pixel_accuracy, test_mean_pixel_accuracy = evaluate_model(model_eval, test_loader, num_classes=4)
     print(f"Test Dice coefficient: {test_dice:.4f}")
+    print(f"Test Mean IoU: {test_miou:.4f}")
+    print(f"Test Pixel Accuracy: {test_pixel_accuracy:.4f}")
+    print(f"Test Mean Pixel Accuracy: {test_mean_pixel_accuracy:.4f}")
+
 
     # 8. Visualize predictions
     test_ids = [test_dataset.list_IDs[i] for i in range(0,len(test_dataset.list_IDs))]
-    show_predicted_segmentations(test_ids, 60, model_eval) # use the loaded model
-    show_predicted_segmentations(test_ids, 60, model_eval)
-    show_predicted_segmentations(test_ids, 65, model_eval)
+    showPredictsById(model_eval, case=test_ids[0][-3:])
+    showPredictsById(model_eval, case=test_ids[1][-3:])
+    showPredictsById(model_eval, case=test_ids[2][-3:])
+    showPredictsById(model_eval, case=test_ids[3][-3:])
+
+    # Per class evaluation
+    classEvaluation(model_eval, case=test_ids[3][-3:], eval_class=1, slice_at=40)
+    classEvaluation(model_eval, case=test_ids[3][-3:], eval_class=2, slice_at=40)
+    classEvaluation(model_eval, case=test_ids[3][-3:], eval_class=3, slice_at=40)
